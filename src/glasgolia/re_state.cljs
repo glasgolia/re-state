@@ -2,34 +2,56 @@
   (:require
     [reagent.core :as ra]
     [reagent.ratom :as ratom]
-    [glasgolia.common :refer [dissoc-in]]
-    [glasgolia.glas-state.core :as gs]))
-
-
+    [glasgolia.glas-state.core :as gs]
+    [glasgolia.glas-state.stateless :as gss]))
 
 (defn create-service
-  "Create a new statechart service.
-  Expects a statechart-machine definition map and an optional config map.
-  The state of the service is going to be stored in a reagent atom, making it
-  easy to react to state changes."
   ([machine config]
-   (let [state-atom (or (:state-atom config) (ra/atom {}))
-         value (ra/cursor state-atom [:value])
-         context (ra/cursor state-atom [:context])
-         value-list (ratom/make-reaction (fn [] (gs/value-to-ids @value)))
-         user-data (:service-data config)
-         service-data {:value      value
-                       :context    context
-                       :value-list value-list
-                       :user-data user-data}
-         new-config (merge config {:state-atom state-atom :service-data service-data :change-listener (gs/service-logger)})
-         service (gs/create-service machine new-config)]
-     service))
+   (println "create-service " machine)
+   (let [re-state (ra/atom {})
+         re-value (ra/cursor re-state [:value])
+         re-context (ra/cursor re-state [:context])
+         re-value-list (ratom/make-reaction (fn[] (gss/value-to-ids @re-value)))
+         user-data {:re-state re-state
+                    :re-value re-value
+                    :re-context re-context
+                    :re-value-list re-value-list
+                    :user-data (:user-data config)}
+         new-config (assoc config :user-data user-data)]
+     (-> (gs/create-service machine new-config)
+         (gs/with-logger println)
+         (gs/with-on-transition (fn[{:keys [value context changed]}]
+                                  (println "on-transition" value context changed)
+                                  (when changed
+                                    (reset! re-state {:value value :context context}))))
+         (gs/start))))
   ([machine]
    (create-service machine {})))
+
+#_ (defn create-service
+     "Create a new statechart service.
+     Expects a statechart-machine definition map and an optional config map.
+     The state of the service is going to be stored in a reagent atom, making it
+     easy to react to state changes."
+     ([machine config]
+      (let [state-atom (or (:state-atom config) (ra/atom {}))
+            value (ra/cursor state-atom [:value])
+            context (ra/cursor state-atom [:context])
+            value-list (ratom/make-reaction (fn [] (gss/value-to-ids @value)))
+            user-data (:service-data config)
+            service-data {:value      value
+                          :context    context
+                          :value-list value-list
+                          :user-data user-data}
+            new-config (merge config {:state-atom state-atom :service-data service-data })
+            service (gs/create-service machine new-config)]
+        service))
+     ([machine]
+      (create-service machine {})))
 (defn state
   "Returns the state reagent atom for the service"
-  [service] (:storage service))
+  [service]
+  (:re-state (gs/user-data service)))
 
 (def start
   "Starts a statechart service.
@@ -47,33 +69,33 @@
 
 (defn machine [service]
   "Get the machine out of a service"
-  (:machine service))
+  (gs/machine service))
 (defn service-id [service]
   "Get the service-id of a service."
-  (:id (:machine service)))
-(defn service-data [service]
-  (get-in service [:service-data :user-data]))
+  (:id (machine service)))
+(defn user-data [service]
+  (:user-data (gs/user-data service)))
 
-(defn value [{:keys [service-data] :as _service}]
+(defn value [service]
   "Get the current statechart value as a reagent atom from the service.
   Expects a service."
-  (:value service-data))
+  (:re-value (gs/user-data service)))
 
-(defn context [{:keys [service-data] :as _service}]
+(defn context [service]
   "Get the context reagent atom for a  service.
   Expects a service."
-  (:context service-data))
+  (:re-context (gs/user-data service)))
 
 (defn context-value [service path]
   "Get a specific value, as a reagent atom, out of a service context.
   Expects a service and a path (like you would use in the get-in function."
   (ratom/make-reaction #(get-in @(context service) path)))
 
-(defn value-list [{:keys [service-data] :as _service}]
+(defn value-list [service]
   "Get a reagent atom with a vector of all active state ids in a service.
   See glas-state/value-to-ids.
   Expects a service."
-  (:value-list service-data))
+  (:re-value-list (gs/user-data service)))
 
 (defn with-local-machine [machine render-fn]
   "Creates a reagent component using a statechart machine and a component render function.
@@ -111,8 +133,8 @@
         id (name state-id)]
     (ratom/make-reaction
       #(if (contains? @vl id)
-        true-value
-        false-value))))
+         true-value
+         false-value))))
 
 (def assign
   "See glas-state/assign"
